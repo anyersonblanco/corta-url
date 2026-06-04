@@ -31,9 +31,18 @@ class AdminPanelProvider extends PanelProvider
             ->login()
             ->favicon(asset('favicon.ico'))
             ->brandName('CortarLink · Webtilia')
+            ->brandLogo(fn () => view('filament.admin.logo'))
+            ->brandLogoHeight('2.5rem')
+            // Paleta Webtilia (Manual de Marca): azul #0066FF primary, amarillo
+            // #FFD700 como warning/acento. Filament 4 deriva la escala 50-950
+            // automáticamente desde el hex.
             ->colors([
-                'primary' => Color::Blue,
+                'primary' => Color::hex('#0066FF'),
+                'warning' => Color::hex('#FFD700'),
             ])
+            // Dark mode off: la paleta corporativa pierde contraste en dark.
+            // El cliente final ve siempre azul + amarillo Webtilia consistente.
+            ->darkMode(false)
             // BODY_END (no FOOTER) — Filament 4 renderiza FOOTER solo en el layout
             // "app" (post-login). BODY_END es universal: login + app.
             ->renderHook(
