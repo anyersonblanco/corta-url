@@ -5,8 +5,10 @@ namespace App\Models;
 use Database\Factories\UserFactory;
 use Filament\Models\Contracts\FilamentUser;
 use Filament\Panel;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -103,6 +105,26 @@ class User extends Authenticatable implements FilamentUser
     public function children(): HasMany
     {
         return $this->hasMany(User::class, 'parent_id');
+    }
+
+    /**
+     * Cuentas que tiene asignadas este usuario via pivot account_user.
+     * Aplica a jefes y creadores. Supervisoras no tienen filas aquí (son dueñas, no asignadas).
+     */
+    public function accounts(): BelongsToMany
+    {
+        return $this->belongsToMany(Account::class, 'account_user')
+            ->withPivot('assigned_by')
+            ->withTimestamps();
+    }
+
+    /**
+     * Cuentas que este usuario creó / es supervisora de (supervisor_id = $this->id).
+     * Solo supervisoras y super_admins tienen filas aquí.
+     */
+    public function createdAccounts(): HasMany
+    {
+        return $this->hasMany(Account::class, 'supervisor_id');
     }
 
     // =========================================================================
@@ -203,6 +225,33 @@ class User extends Authenticatable implements FilamentUser
         }
 
         return false;
+    }
+
+    /**
+     * Devuelve las cuentas que este usuario puede asignar a otros.
+     *
+     *  - super_admin  : todas las cuentas del sistema.
+     *  - supervisor   : las cuentas que él creó (createdAccounts).
+     *  - jefe         : las cuentas que tiene asignadas (accounts pivot).
+     *  - creador      : ninguna (no puede asignar cuentas).
+     *
+     * @return Collection<int, Account>
+     */
+    public function assignableAccounts(): Collection
+    {
+        if ($this->isSuperAdmin()) {
+            return Account::all();
+        }
+
+        if ($this->isSupervisor()) {
+            return $this->createdAccounts()->get();
+        }
+
+        if ($this->isJefe()) {
+            return $this->accounts()->get();
+        }
+
+        return new Collection();
     }
 
     /**

@@ -2,7 +2,9 @@
 
 namespace App\Providers;
 
+use App\Models\Account;
 use App\Models\User;
+use App\Policies\AccountPolicy;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
 
@@ -31,7 +33,13 @@ class AppServiceProvider extends ServiceProvider
          * Decisión técnica: un único Gate::before centralizado es más simple y seguro
          * que duplicar `if ($user->isSuperAdmin()) return true;` en cada Policy.
          * Cero riesgo de que una Policy nueva olvide el bypass.
+         *
+         * IMPORTANTE: el bypass solo aplica si el usuario está autenticado (el closure
+         * recibe null cuando no hay sesión y Gate::before no se invoca en ese caso).
          */
+        // Fase 2 — registrar Policy de Account
+        Gate::policy(Account::class, AccountPolicy::class);
+
         Gate::before(function (User $user, string $ability): ?bool {
             if ($user->isSuperAdmin()) {
                 return true;

@@ -26,6 +26,7 @@ class Link extends Model
     protected $fillable = [
         'slug', 'destination_url', 'title', 'tags',
         'is_active', 'expires_at', 'password_hash', 'created_by',
+        'account_id', // Fase 2 — nullable; NULL = "Sin asignar"
     ];
 
     protected $casts = [
@@ -40,6 +41,16 @@ class Link extends Model
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    /**
+     * Cuenta (cliente Webtilia) a la que pertenece este link.
+     * NULL = "Sin asignar" (válido para super_admin, supervisor y jefe).
+     * Fase 3 agrega validación UI que obliga a creadores a elegir cuenta.
+     */
+    public function account(): BelongsTo
+    {
+        return $this->belongsTo(Account::class);
     }
 
     public function clicks(): HasMany
