@@ -58,19 +58,25 @@ class LinkResource extends Resource
                         // como dependency suya (Get/Set/component) y tira BindingResolutionException.
                         // El fn() externo se evalúa primero por Filament (sin args), retorna la
                         // closure Laravel-friendly que la validación corre normal.
+                        //
+                        // Uniqueness se valida con ->unique(ignoreRecord: true) nativo de Filament
+                        // porque en /livewire/update request()->route('record') resuelve null y
+                        // disparaba falsos positivos al editar.
                         ->rules([
                             fn () => function (string $attribute, $value, \Closure $fail) {
                                 if (empty($value)) return; // permitido (se autogenera)
-                                $service = app(ShortLinkService::class);
-                                $record = request()->route('record');
-                                $excludeId = $record instanceof \App\Models\Link
-                                    ? $record->id
-                                    : (is_numeric($record) ? (int) $record : null);
-                                $error = $service->validateCustomSlug($value, $excludeId);
-                                if ($error) {
-                                    $fail($error);
+                                if (!preg_match('/^[a-zA-Z0-9_-]{2,64}$/', $value)) {
+                                    $fail('El slug debe tener entre 2 y 64 caracteres y solo puede contener letras, números, guiones y guiones bajos.');
+                                    return;
+                                }
+                                if (in_array(strtolower($value), ShortLinkService::RESERVED_SLUGS, true)) {
+                                    $fail('Ese slug está reservado por el sistema (colisiona con una ruta). Probá otro.');
                                 }
                             },
+                        ])
+                        ->unique(ignoreRecord: true)
+                        ->validationMessages([
+                            'unique' => 'Ese slug ya está en uso por otro enlace.',
                         ]),
                     TextInput::make('title')
                         ->label('Título o descripción interna')

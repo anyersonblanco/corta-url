@@ -11,7 +11,7 @@
 <head>
 <meta charset="UTF-8">
 <title>{{ $page->title }} · WLink</title>
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="index,follow">
 <meta name="description" content="{{ $page->description ?: $page->title }}">
 

@@ -37,6 +37,12 @@ Thumbs.db
 /storage/scanner-chrome-*
 /_remote_exec.php
 /_probe.php
+/_deploy.php
+/_init.php
 /deploy-*.tar.gz
 /deploy-*.zip
 /scanner-deploy.tar.gz
+/scanner-fixes.tar.gz
+
+# Claude Code dev tooling (reportes QA, screens, planning) — no commitear
+/.claude/

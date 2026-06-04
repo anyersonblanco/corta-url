@@ -63,19 +63,24 @@ class PageResource extends Resource
                                         ->placeholder('Ej: webtilia, eventos2026 (dejá vacío para autogenerar)')
                                         ->helperText('La URL final va a ser ' . config('wlink.short_base_url') . config('wlink.pages_prefix') . '/{slug}. Solo letras/números/guiones. Si lo dejás vacío, se genera uno aleatorio de 7 caracteres.')
                                         ->maxLength(64)
+                                        // Misma razón que LinkResource: uniqueness va por
+                                        // ->unique(ignoreRecord: true) nativo de Filament
+                                        // (request()->route('record') resuelve null en /livewire/update).
                                         ->rules([
                                             fn () => function (string $attribute, $value, \Closure $fail) {
                                                 if (empty($value)) return;
-                                                $service = app(ShortLinkService::class);
-                                                $record = request()->route('record');
-                                                $excludeId = $record instanceof Page
-                                                    ? $record->id
-                                                    : (is_numeric($record) ? (int) $record : null);
-                                                $error = $service->validatePageSlug($value, $excludeId);
-                                                if ($error) {
-                                                    $fail($error);
+                                                if (!preg_match('/^[a-zA-Z0-9_-]{2,64}$/', $value)) {
+                                                    $fail('El slug debe tener entre 2 y 64 caracteres y solo puede contener letras, números, guiones y guiones bajos.');
+                                                    return;
+                                                }
+                                                if (in_array(strtolower($value), ShortLinkService::RESERVED_SLUGS, true)) {
+                                                    $fail('Ese slug está reservado por el sistema. Probá otro.');
                                                 }
                                             },
+                                        ])
+                                        ->unique(ignoreRecord: true)
+                                        ->validationMessages([
+                                            'unique' => 'Ese slug ya está en uso por otra Página.',
                                         ]),
                                     Textarea::make('description')
                                         ->label('Descripción corta (opcional)')
