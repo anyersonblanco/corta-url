@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -21,7 +22,7 @@ use Illuminate\Support\Facades\DB;
  */
 class Link extends Model
 {
-    use HasFactory;
+    use HasFactory, SoftDeletes;
 
     protected $fillable = [
         'slug', 'destination_url', 'title', 'tags',
@@ -56,6 +57,25 @@ class Link extends Model
     public function clicks(): HasMany
     {
         return $this->hasMany(LinkClick::class);
+    }
+
+    /**
+     * Solicitudes de eliminación asociadas a este link (Fase 4).
+     */
+    public function deletionRequests(): HasMany
+    {
+        return $this->hasMany(LinkDeletionRequest::class);
+    }
+
+    /**
+     * True si existe una solicitud de eliminación en estado pending para este link.
+     * Query optimizada con exists() — no carga registros en memoria.
+     */
+    public function hasPendingDeletionRequest(): bool
+    {
+        return $this->deletionRequests()
+            ->where('status', LinkDeletionRequest::STATUS_PENDING)
+            ->exists();
     }
 
     public function scopeActive(Builder $q): Builder

@@ -5,6 +5,7 @@ namespace App\Filament\Resources;
 use App\Filament\Resources\LinkResource\Pages;
 use App\Models\Account;
 use App\Models\Link;
+use App\Models\LinkDeletionRequest;
 use App\Services\ShortLinkService;
 use Filament\Actions\Action;
 use Filament\Actions\DeleteAction;
@@ -22,6 +23,7 @@ use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
@@ -205,6 +207,28 @@ class LinkResource extends Resource
                     ->label('Fecha de creación')
                     ->dateTime('d/m/Y H:i')
                     ->sortable(),
+
+                // Fase 4 — columna de estado de solicitud de eliminación.
+                // Oculta por defecto; visible/filtrable solo para roles que aprueban.
+                TextColumn::make('deletion_status')
+                    ->label('Estado eliminación')
+                    ->state(function (Link $r): string {
+                        if ($r->trashed()) {
+                            return 'Archivado';
+                        }
+                        if ($r->hasPendingDeletionRequest()) {
+                            return 'Pending';
+                        }
+                        return '—';
+                    })
+                    ->badge()
+                    ->color(fn (string $state): string => match ($state) {
+                        'Pending'   => 'warning',
+                        'Archivado' => 'danger',
+                        default     => 'gray',
+                    })
+                    ->toggleable(isToggledHiddenByDefault: true)
+                    ->visible(fn (): bool => ! (Auth::user()?->isCreador() ?? true)),
             ])
             ->defaultSort('created_at', 'desc')
             ->filters([
@@ -232,7 +256,55 @@ class LinkResource extends Resource
 
                 ViewAction::make()->label('Detalles'),
                 EditAction::make()->label('Editar'),
-                DeleteAction::make()->label('Eliminar'),
+
+                // Fase 4 — Acción "Solicitar eliminación" solo para creadores.
+                // Crea una fila en link_deletion_requests con status=pending.
+                // Deshabilitada si ya existe una solicitud pending para este link.
+                Action::make('solicitarEliminacion')
+                    ->label('Solicitar eliminación')
+                    ->tooltip('Envía una solicitud para que un supervisor o jefe apruebe la eliminación de este enlace.')
+                    ->icon('heroicon-o-trash')
+                    ->color('danger')
+                    ->visible(fn (): bool => Auth::user()?->isCreador() ?? false)
+                    ->disabled(fn (Link $r): bool => $r->hasPendingDeletionRequest())
+                    ->modalHeading('Solicitar eliminación del enlace')
+                    ->modalDescription('Tu solicitud quedará pendiente de aprobación por un supervisor o jefe.')
+                    ->schema([
+                        Textarea::make('reason')
+                            ->label('Motivo de la eliminación (obligatorio)')
+                            ->placeholder('Explicá por qué querés eliminar este enlace...')
+                            ->required()
+                            ->maxLength(1000)
+                            ->rows(4),
+                    ])
+                    ->action(function (Link $record, array $data): void {
+                        // Verificar que no existe solicitud pending (constraint de aplicación).
+                        if ($record->hasPendingDeletionRequest()) {
+                            Notification::make()
+                                ->title('Ya existe una solicitud pendiente para este enlace.')
+                                ->warning()
+                                ->send();
+                            return;
+                        }
+
+                        LinkDeletionRequest::create([
+                            'link_id'      => $record->id,
+                            'requested_by' => Auth::id(),
+                            'reason'       => $data['reason'],
+                            'status'       => LinkDeletionRequest::STATUS_PENDING,
+                        ]);
+
+                        Notification::make()
+                            ->title('Tu solicitud quedó pendiente de aprobación.')
+                            ->success()
+                            ->send();
+                    }),
+
+                // Fase 4 — DeleteAction solo visible para super_admin, supervisor y jefe.
+                // Para creadores, esta acción queda oculta (usan solicitud de arriba).
+                DeleteAction::make()
+                    ->label('Eliminar')
+                    ->hidden(fn (): bool => Auth::user()?->isCreador() ?? false),
             ])
             ->toolbarActions([
                 DeleteBulkAction::make()->label('Eliminar seleccionados'),

@@ -256,21 +256,43 @@ class User extends Authenticatable implements FilamentUser
     }
 
     /**
-     * Placeholder Fase 1: indica si este usuario puede aprobar la eliminación
-     * de un Link dado. La lógica completa (verificar link.account y rama) se
-     * implementa en Fase 4 cuando existen las tablas de cuentas y solicitudes.
+     * Fase 4 — Indica si este usuario puede aprobar/rechazar la solicitud de
+     * eliminación de un Link dado.
      *
-     * Por ahora solo evalúa el rol:
-     *  - super_admin: siempre puede
-     *  - supervisor/jefe: pueden (se refinará en Fase 4 para verificar rama)
-     *  - creador: nunca puede (él crea la solicitud, no la aprueba)
+     * Reglas por rol:
+     *  - super_admin : siempre puede (cualquier link del sistema).
+     *  - supervisor  : puede si el link tiene account_id y esa cuenta le pertenece
+     *                  (createdAccounts), O si el creador del link está en su rama.
+     *  - jefe        : puede si el creador del link es uno de sus hijos directos.
+     *  - creador     : nunca puede (él crea la solicitud, no la aprueba).
      */
     public function canApproveDeletion(Link $link): bool
     {
-        return match ($this->role) {
-            'super_admin', 'supervisor', 'jefe' => true,
-            default => false,
-        };
+        if ($this->isSuperAdmin()) {
+            return true;
+        }
+
+        if ($this->isSupervisor()) {
+            // Puede si la cuenta del link le pertenece...
+            if ($link->account_id !== null && $this->createdAccounts()->where('id', $link->account_id)->exists()) {
+                return true;
+            }
+            // ...o si el creador del link está en su rama descendente.
+            if ($link->created_by !== null && $this->branchUserIds()->contains($link->created_by)) {
+                return true;
+            }
+            return false;
+        }
+
+        if ($this->isJefe()) {
+            // Solo puede si el creador del link es uno de sus hijos directos.
+            if ($link->created_by === null) {
+                return false;
+            }
+            return $this->children()->where('id', $link->created_by)->exists();
+        }
+
+        return false; // creador nunca puede
     }
 
     // =========================================================================

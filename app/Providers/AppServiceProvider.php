@@ -3,8 +3,12 @@
 namespace App\Providers;
 
 use App\Models\Account;
+use App\Models\Link;
+use App\Models\LinkDeletionRequest;
 use App\Models\User;
 use App\Policies\AccountPolicy;
+use App\Policies\LinkDeletionRequestPolicy;
+use App\Policies\LinkPolicy;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
 
@@ -39,6 +43,10 @@ class AppServiceProvider extends ServiceProvider
          */
         // Fase 2 — registrar Policy de Account
         Gate::policy(Account::class, AccountPolicy::class);
+
+        // Fase 4 — registrar Policies de Link y LinkDeletionRequest
+        Gate::policy(Link::class, LinkPolicy::class);
+        Gate::policy(LinkDeletionRequest::class, LinkDeletionRequestPolicy::class);
 
         Gate::before(function (User $user, string $ability): ?bool {
             if ($user->isSuperAdmin()) {
