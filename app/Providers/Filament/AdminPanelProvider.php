@@ -34,8 +34,10 @@ class AdminPanelProvider extends PanelProvider
             ->colors([
                 'primary' => Color::Blue,
             ])
+            // BODY_END (no FOOTER) — Filament 4 renderiza FOOTER solo en el layout
+            // "app" (post-login). BODY_END es universal: login + app.
             ->renderHook(
-                PanelsRenderHook::FOOTER,
+                PanelsRenderHook::BODY_END,
                 fn (): string => view('filament.admin.footer')->render()
             )
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\Filament\Resources')
