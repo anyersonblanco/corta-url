@@ -5,6 +5,7 @@ namespace App\Models;
 use Database\Factories\UserFactory;
 use Filament\Models\Contracts\FilamentUser;
 use Filament\Panel;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -13,6 +14,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Collection as SupportCollection;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Modelo de usuario de CortarLink.
@@ -293,6 +296,178 @@ class User extends Authenticatable implements FilamentUser
         }
 
         return false; // creador nunca puede
+    }
+
+    // =========================================================================
+    // Orfandad — detección y reasignación (Fase 5)
+    // =========================================================================
+
+    /**
+     * Determina si este usuario es "huérfano":
+     * está activo, tiene parent_id asignado, pero su parent no existe o está inactivo.
+     *
+     * super_admin nunca es huérfano (no tiene parent por diseño).
+     */
+    public function isOrphan(): bool
+    {
+        // super_admin no tiene parent por diseño — nunca huérfano
+        if ($this->isSuperAdmin()) {
+            return false;
+        }
+
+        // Sin parent_id → no huérfano (usuario raíz no super_admin, ej. supervisor sin asignar)
+        if ($this->parent_id === null) {
+            return false;
+        }
+
+        // Solo los activos pueden ser huérfanos funcionalmente
+        if (! $this->is_active) {
+            return false;
+        }
+
+        // Cargar relación si no está cargada
+        $parent = $this->relationLoaded('parent') ? $this->parent : User::find($this->parent_id);
+
+        // Huérfano si el parent no existe o está inactivo
+        if ($parent === null) {
+            return true;
+        }
+
+        return ! $parent->is_active;
+    }
+
+    /**
+     * Razón de la orfandad para tooltip / log.
+     *
+     * Retorna:
+     *  null                 — no es huérfano
+     *  'parent_inactive'    — el parent existe pero está inactivo
+     *  'parent_missing'     — parent_id apunta a un ID que no existe en BD
+     */
+    public function orphanReason(): ?string
+    {
+        if ($this->isSuperAdmin() || $this->parent_id === null || ! $this->is_active) {
+            return null;
+        }
+
+        $parent = $this->relationLoaded('parent') ? $this->parent : User::find($this->parent_id);
+
+        if ($parent === null) {
+            return 'parent_missing';
+        }
+
+        if (! $parent->is_active) {
+            return 'parent_inactive';
+        }
+
+        return null;
+    }
+
+    /**
+     * Scope que devuelve usuarios activos con parent inactivo o inexistente.
+     *
+     * Excluye super_admin (parent_id = null por diseño) via whereNotNull('parent_id').
+     * Ejecuta en 1-2 queries SQL usando whereHas/whereDoesntHave.
+     */
+    public function scopeOrphan(Builder $q): Builder
+    {
+        return $q->where('is_active', true)
+            ->whereNotNull('parent_id')
+            ->where(function (Builder $inner) {
+                // Caso A: parent existe pero está inactivo
+                $inner->whereHas('parent', function (Builder $p) {
+                    $p->where('is_active', false);
+                })
+                // Caso B: parent_id apunta a un ID que no existe en la tabla
+                ->orWhereDoesntHave('parent');
+            });
+    }
+
+    /**
+     * Reasigna este usuario a un nuevo parent.
+     *
+     * Validaciones:
+     *  - El rol de $newParent debe ser el correcto para el rol de $this:
+     *      jefe    → newParent debe ser 'supervisor'
+     *      creador → newParent debe ser 'jefe'
+     *  - $newParent debe estar activo.
+     *
+     * @throws \InvalidArgumentException si el rol o el estado no son válidos.
+     */
+    public function reassignParent(User $newParent): void
+    {
+        // Validar rol compatible
+        $expectedParentRole = match ($this->role) {
+            'jefe'    => 'supervisor',
+            'creador' => 'jefe',
+            default   => null,
+        };
+
+        if ($expectedParentRole === null) {
+            throw new \InvalidArgumentException(
+                "El rol '{$this->role}' no puede tener parent reasignado via reassignParent()."
+            );
+        }
+
+        if ($newParent->role !== $expectedParentRole) {
+            throw new \InvalidArgumentException(
+                "Para reasignar un '{$this->role}', el nuevo parent debe tener rol '{$expectedParentRole}'. "
+                . "Se recibió rol '{$newParent->role}'."
+            );
+        }
+
+        if (! $newParent->is_active) {
+            throw new \InvalidArgumentException(
+                "No se puede reasignar a '{$newParent->name}' porque está inactivo."
+            );
+        }
+
+        $this->parent_id = $newParent->id;
+        $this->save();
+    }
+
+    /**
+     * Reasigna todos los jefes de $oldParent a $newParent en una sola transacción.
+     *
+     * Aplica solo a hijos con role='jefe' — no toca creadores ni otras ramas.
+     * Loguea la operación con count de afectados.
+     *
+     * @return int  Cantidad de jefes reasignados.
+     * @throws \InvalidArgumentException si $newParent no es supervisor activo.
+     */
+    public static function reassignBranchTo(User $oldParent, User $newParent): int
+    {
+        if ($newParent->role !== 'supervisor') {
+            throw new \InvalidArgumentException(
+                "El destino de reassignBranchTo debe ser rol 'supervisor'. "
+                . "Se recibió '{$newParent->role}'."
+            );
+        }
+
+        if (! $newParent->is_active) {
+            throw new \InvalidArgumentException(
+                "No se puede reasignar la rama a '{$newParent->name}' porque está inactiva."
+            );
+        }
+
+        return DB::transaction(function () use ($oldParent, $newParent): int {
+            $jefes = User::where('parent_id', $oldParent->id)
+                ->where('role', 'jefe')
+                ->get();
+
+            $count = 0;
+            foreach ($jefes as $jefe) {
+                $jefe->parent_id = $newParent->id;
+                $jefe->save();
+                $count++;
+            }
+
+            if ($count > 0) {
+                Log::info("Reassign branch: supervisor {$oldParent->id} → {$newParent->id}, jefes movidos: {$count}");
+            }
+
+            return $count;
+        });
     }
 
     // =========================================================================

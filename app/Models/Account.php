@@ -89,6 +89,100 @@ class Account extends Model
     }
 
     // =========================================================================
+    // Orfandad — detección y reasignación (Fase 5)
+    // =========================================================================
+
+    /**
+     * Determina si esta cuenta es "huérfana":
+     * está activa pero su supervisora no existe o está inactiva.
+     */
+    public function isOrphan(): bool
+    {
+        if (! $this->is_active) {
+            return false;
+        }
+
+        $supervisor = $this->relationLoaded('supervisor') ? $this->supervisor : User::find($this->supervisor_id);
+
+        if ($supervisor === null) {
+            return true;
+        }
+
+        return ! $supervisor->is_active;
+    }
+
+    /**
+     * Razón de la orfandad para tooltip / log.
+     *
+     * Retorna:
+     *  null                      — no es huérfana
+     *  'supervisor_inactive'     — la supervisora existe pero está inactiva
+     *  'supervisor_missing'      — supervisor_id apunta a un ID que no existe
+     */
+    public function orphanReason(): ?string
+    {
+        if (! $this->is_active) {
+            return null;
+        }
+
+        $supervisor = $this->relationLoaded('supervisor') ? $this->supervisor : User::find($this->supervisor_id);
+
+        if ($supervisor === null) {
+            return 'supervisor_missing';
+        }
+
+        if (! $supervisor->is_active) {
+            return 'supervisor_inactive';
+        }
+
+        return null;
+    }
+
+    /**
+     * Scope que devuelve cuentas activas cuya supervisora está inactiva o no existe.
+     */
+    public function scopeOrphan(Builder $q): Builder
+    {
+        return $q->where('is_active', true)
+            ->where(function (Builder $inner) {
+                // Caso A: supervisora existe pero está inactiva
+                $inner->whereHas('supervisor', function (Builder $s) {
+                    $s->where('is_active', false);
+                })
+                // Caso B: supervisor_id apunta a un ID inexistente
+                ->orWhereDoesntHave('supervisor');
+            });
+    }
+
+    /**
+     * Reasigna esta cuenta a una nueva supervisora.
+     *
+     * Validaciones:
+     *  - $newSupervisor debe tener role='supervisor'.
+     *  - $newSupervisor debe estar activa.
+     *
+     * @throws \InvalidArgumentException si el rol o el estado no son válidos.
+     */
+    public function reassignSupervisor(User $newSupervisor): void
+    {
+        if ($newSupervisor->role !== 'supervisor') {
+            throw new \InvalidArgumentException(
+                "La cuenta solo puede reasignarse a un usuario con rol 'supervisor'. "
+                . "Se recibió rol '{$newSupervisor->role}'."
+            );
+        }
+
+        if (! $newSupervisor->is_active) {
+            throw new \InvalidArgumentException(
+                "No se puede reasignar a '{$newSupervisor->name}' porque está inactiva."
+            );
+        }
+
+        $this->supervisor_id = $newSupervisor->id;
+        $this->save();
+    }
+
+    // =========================================================================
     // Helpers de asignación
     // =========================================================================
 
