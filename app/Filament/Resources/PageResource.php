@@ -26,6 +26,7 @@ use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Auth;
 
 class PageResource extends Resource
@@ -287,5 +288,33 @@ class PageResource extends Resource
             'edit' => Pages\EditPage::route('/{record}/edit'),
             'view' => Pages\ViewPage::route('/{record}'),
         ];
+    }
+
+    /**
+     * Scope canónico por rama (Fase 3).
+     *
+     * Page tiene columna created_by (FK nullable a users).
+     * El scope es idéntico al de LinkResource pero sobre la tabla pages.
+     *
+     * super_admin : ve todas las páginas (sin filtro).
+     * supervisor  : ve páginas creadas por usuarios de su rama descendente.
+     * jefe        : ve páginas creadas por sus creadores directos + las suyas.
+     * creador     : ve solo sus propias páginas.
+     *
+     * Páginas con created_by = null (pre-feature sin asignar) son visibles solo
+     * para super_admin porque ningún branchUserIds() incluye null en la query.
+     */
+    public static function getEloquentQuery(): Builder
+    {
+        $base = parent::getEloquentQuery();
+        $user = Auth::user();
+
+        if (!$user || $user->isSuperAdmin()) {
+            return $base;
+        }
+
+        $branchIds = $user->branchUserIds()->all();
+
+        return $base->whereIn('created_by', $branchIds);
     }
 }

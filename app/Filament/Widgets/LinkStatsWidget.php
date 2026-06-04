@@ -6,51 +6,82 @@ use App\Models\Link;
 use App\Models\LinkClick;
 use Filament\Widgets\StatsOverviewWidget;
 use Filament\Widgets\StatsOverviewWidget\Stat;
+use Illuminate\Support\Facades\Auth;
 
 /**
- * Widget de stats globales — visible en el Dashboard del admin CortarLink.
+ * Widget de stats por rama — visible en el Dashboard del admin CortarLink.
  *
  * 4 KPIs:
- *  - Total clicks acumulados (todos los enlaces)
+ *  - Total clicks acumulados (según rama del user autenticado)
  *  - Clicks últimas 24h
  *  - Enlaces activos
  *  - Top enlace de los últimos 7 días (slug + clicks)
+ *
+ * Fase 3: las queries se filtran por branchUserIds() del user autenticado.
+ * super_admin sigue viendo stats globales (branchUserIds = todos).
  */
 class LinkStatsWidget extends StatsOverviewWidget
 {
     protected static ?int $sort = 5;
     protected ?string $heading = 'Estadísticas generales';
-    protected ?string $description = 'Resumen de todos los enlaces cortos creados por el equipo';
+    protected ?string $description = 'Resumen de los enlaces cortos de tu rama';
 
     protected function getStats(): array
     {
-        // clicks_count = TODOS los hits a /l/{slug} (humanos + bots)
-        $totalClicks = (int) Link::sum('clicks_count');
+        $user = Auth::user();
 
-        $clicksLast24h = LinkClick::where('created_at', '>=', now()->subDay())->count();
-        $clicksLast7d = LinkClick::where('created_at', '>=', now()->subDays(7))->count();
-        $enlacesActivos = Link::active()->count();
+        // IDs de usuarios de la rama del user autenticado.
+        // Para super_admin devuelve todos (sin cambio en el comportamiento global).
+        $branchIds = $user ? $user->branchUserIds()->all() : [];
 
-        // Top enlace por clicks en los últimos 7 días
+        // ---------------------------------------------------------------
+        // clicks_count = denorm total por link — suma filtrada por rama
+        // ---------------------------------------------------------------
+        $totalClicks = (int) Link::whereIn('created_by', $branchIds)->sum('clicks_count');
+
+        // ---------------------------------------------------------------
+        // Clicks en ventanas de tiempo — via link_clicks filtrado por rama
+        // ---------------------------------------------------------------
+        $clicksLast24h = LinkClick::whereHas('link', function ($q) use ($branchIds) {
+            $q->whereIn('created_by', $branchIds);
+        })->where('created_at', '>=', now()->subDay())->count();
+
+        $clicksLast7d = LinkClick::whereHas('link', function ($q) use ($branchIds) {
+            $q->whereIn('created_by', $branchIds);
+        })->where('created_at', '>=', now()->subDays(7))->count();
+
+        // ---------------------------------------------------------------
+        // Enlaces activos de la rama
+        // ---------------------------------------------------------------
+        $enlacesActivos = Link::active()->whereIn('created_by', $branchIds)->count();
+
+        // ---------------------------------------------------------------
+        // Top enlace por clicks en los últimos 7 días — solo de la rama
+        // ---------------------------------------------------------------
         $topLink = Link::query()
             ->select('links.*')
             ->join('link_clicks', 'link_clicks.link_id', '=', 'links.id')
             ->where('link_clicks.created_at', '>=', now()->subDays(7))
+            ->whereIn('links.created_by', $branchIds)
             ->selectRaw('COUNT(link_clicks.id) as clicks_7d')
             ->groupBy('links.id')
             ->orderByDesc('clicks_7d')
             ->first();
 
-        // Sparkline últimos 7 días
+        // ---------------------------------------------------------------
+        // Sparkline últimos 7 días — solo clicks de la rama
+        // ---------------------------------------------------------------
         $sparkline = [];
         for ($i = 6; $i >= 0; $i--) {
             $dia = now()->subDays($i)->format('Y-m-d');
-            $sparkline[] = LinkClick::whereDate('created_at', $dia)->count();
+            $sparkline[] = LinkClick::whereHas('link', function ($q) use ($branchIds) {
+                $q->whereIn('created_by', $branchIds);
+            })->whereDate('created_at', $dia)->count();
         }
 
         return [
             Stat::make('Total clicks acumulados', number_format($totalClicks))
-                ->description('Suma de clicks de todos los enlaces cortos')
+                ->description('Suma de clicks de los enlaces de tu rama')
                 ->descriptionIcon('heroicon-m-cursor-arrow-rays')
                 ->color('primary')
                 ->chart($sparkline),

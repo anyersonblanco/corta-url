@@ -8,6 +8,8 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Cuenta de cliente Webtilia en CortarLink.
@@ -121,14 +123,35 @@ class Account extends Model
     /**
      * Retira la asignación de esta cuenta para un usuario.
      *
-     * Nota Fase 3: cuando se retire la cuenta de un jefe, también habrá que
-     * borrar las asignaciones de sus creadores para esta cuenta. Por ahora
-     * esta función solo borra la fila del usuario dado (Fase 3 maneja cascada).
+     * Cascada para jefes (Fase 3):
+     * Cuando el usuario retirado tiene rol 'jefe', todas las filas pivot de
+     * account_user donde:
+     *   account_id = $this->id  AND  assigned_by = $user->id
+     * también se eliminan, porque esos creadores recibieron la cuenta
+     * de la mano de ese jefe.
+     *
+     * Los links existentes NO se borran ni cambian su account_id.
+     * Los creadores afectados simplemente pierden visibilidad del link
+     * porque ya no tienen la cuenta asignada.
      *
      * @param  User  $user  El usuario al que se le retira la cuenta.
      */
     public function unassignFrom(User $user): void
     {
+        // Cascada: si el user removido es un jefe, borrar también las filas
+        // que ÉL asignó a sus creadores para esta misma cuenta.
+        if ($user->isJefe()) {
+            $removedCount = DB::table('account_user')
+                ->where('account_id', $this->id)
+                ->where('assigned_by', $user->id)
+                ->delete();
+
+            if ($removedCount > 0) {
+                Log::info("Cascade unassign: account {$this->id}, jefe {$user->id} → removidos {$removedCount} creadores");
+            }
+        }
+
+        // Retirar al propio user (jefe o cualquier otro rol)
         $this->users()->detach($user->id);
     }
 }

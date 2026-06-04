@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Collection as SupportCollection;
 
 /**
  * Modelo de usuario de CortarLink.
@@ -270,5 +271,69 @@ class User extends Authenticatable implements FilamentUser
             'super_admin', 'supervisor', 'jefe' => true,
             default => false,
         };
+    }
+
+    // =========================================================================
+    // Rama jerárquica (Fase 3)
+    // =========================================================================
+
+    /**
+     * Devuelve los IDs de TODOS los usuarios en la rama descendente del user actual,
+     * incluyendo al user mismo.
+     *
+     * Profundidad máxima soportada: 3 niveles descendentes (equivale a
+     * supervisor → jefe → creador desde el supervisor).
+     *
+     * Algoritmo iterativo (queue BFS) con hashset de visitados para anti-ciclos.
+     * Ejecuta en máximo 3 queries IN (una por nivel), nunca N+1.
+     *
+     * Reglas por rol:
+     *  - super_admin  : devuelve todos los user IDs del sistema.
+     *  - supervisor   : él mismo + sus jefes (nivel 1) + creadores de sus jefes (nivel 2).
+     *  - jefe         : él mismo + sus creadores directos (nivel 1).
+     *  - creador      : solo él mismo.
+     *
+     * @return SupportCollection<int, int>  Collection de integers (IDs).
+     */
+    public function branchUserIds(): SupportCollection
+    {
+        // super_admin ve todo el sistema
+        if ($this->isSuperAdmin()) {
+            return User::pluck('id');
+        }
+
+        $visited = [];   // hashset para anti-ciclos
+        $result  = [];   // IDs acumulados
+
+        // Incluir al propio user
+        $visited[$this->id] = true;
+        $result[]           = $this->id;
+
+        // Queue de IDs cuyo nivel descendente hay que cargar
+        $currentLevelIds = [$this->id];
+        $maxDepth        = 3; // profundidad máxima de descenso
+
+        for ($depth = 0; $depth < $maxDepth && !empty($currentLevelIds); $depth++) {
+            // Una sola query por nivel — evita N+1
+            $children = User::whereIn('parent_id', $currentLevelIds)
+                ->pluck('id')
+                ->all();
+
+            $nextLevelIds = [];
+
+            foreach ($children as $childId) {
+                // Anti-ciclo: si ya está visitado, saltar
+                if (isset($visited[$childId])) {
+                    continue;
+                }
+                $visited[$childId] = true;
+                $result[]          = $childId;
+                $nextLevelIds[]    = $childId;
+            }
+
+            $currentLevelIds = $nextLevelIds;
+        }
+
+        return collect($result);
     }
 }

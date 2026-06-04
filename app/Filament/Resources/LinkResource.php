@@ -3,6 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\LinkResource\Pages;
+use App\Models\Account;
 use App\Models\Link;
 use App\Services\ShortLinkService;
 use Filament\Actions\Action;
@@ -11,6 +12,7 @@ use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
 use Filament\Actions\ViewAction;
 use Filament\Forms\Components\DateTimePicker;
+use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\Toggle;
@@ -88,6 +90,28 @@ class LinkResource extends Resource
                         ->placeholder('Ej: instagram, campaña-mayo, newsletter')
                         ->helperText('Lista separada por comas. Sirve para filtrar enlaces por canal o proyecto.')
                         ->maxLength(255),
+
+                    // Fase 3 — Cuenta del cliente a la que pertenece este enlace.
+                    // Pool restringido según rol del usuario autenticado:
+                    //   super_admin → todas las cuentas
+                    //   supervisor  → cuentas que él creó (createdAccounts)
+                    //   jefe        → cuentas que tiene asignadas (pivot account_user)
+                    //   creador     → cuentas que tiene asignadas (pivot account_user)
+                    // Requerido SOLO para creadores; los demás roles pueden dejarlo null.
+                    Select::make('account_id')
+                        ->label('Cuenta del cliente')
+                        ->helperText('A qué cliente pertenece este enlace. Los creadores deben elegir obligatoriamente.')
+                        ->placeholder('— Sin asignar —')
+                        ->options(function () {
+                            $user = Auth::user();
+                            if (!$user) {
+                                return [];
+                            }
+                            $accounts = $user->assignableAccounts();
+                            return $accounts->pluck('name', 'id')->all();
+                        })
+                        ->required(fn () => Auth::user()?->isCreador() ?? false)
+                        ->searchable(),
                 ])
                 ->columns(1),
 
@@ -238,8 +262,36 @@ class LinkResource extends Resource
         ];
     }
 
+    /**
+     * Scope canónico por rama (Fase 3).
+     *
+     * super_admin : ve todos los links (sin filtro).
+     * supervisor  : ve links de todos los usuarios en su rama descendente
+     *               (él mismo + sus jefes + creadores de sus jefes),
+     *               filtrado por created_by.
+     * jefe        : ve links creados por sus creadores directos + los suyos propios,
+     *               filtrado por created_by.
+     * creador     : ve solo sus propios links.
+     *
+     * Links pre-feature con account_id = null son invisibles para roles no super_admin
+     * únicamente cuando fueron creados por usuarios fuera de su rama (el filtro
+     * whereIn('created_by', ...) ya los excluye naturalmente).
+     * Un link con account_id = null creado por un user dentro de la rama SÍ es visible
+     * (el scope es por created_by, no por account_id).
+     * Links con account_id = null y created_by = null (pre-feature migración antigua)
+     * son visibles solo para super_admin porque ningún branchUserIds incluye null.
+     */
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery();
+        $base = parent::getEloquentQuery();
+        $user = Auth::user();
+
+        if (!$user || $user->isSuperAdmin()) {
+            return $base;
+        }
+
+        $branchIds = $user->branchUserIds()->all();
+
+        return $base->whereIn('created_by', $branchIds);
     }
 }
